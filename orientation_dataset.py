@@ -9,6 +9,7 @@ from detectron2.config import get_cfg
 from torchvision import models, transforms
 from sklearn.cluster import AgglomerativeClustering
 import cv2
+from tqdm import tqdm
 
 from geopy import Point
 from geopy import distance
@@ -17,45 +18,67 @@ class TSDataset(Dataset):
     def __init__(self, data_path, img_root, device,
                  config_path, weight_path, training=False):
 
-        with open(data_path, 'r') as f:
-            self.data = json.load(f)
-
-        self.keys = list(self.data.keys())
         self.image_root = img_root
         self.device = device
         self.training = training
 
-        img_dict = {}
-        ids_dict = {}
-        box_dict = {}
-        category_dict = {}
-        for key in self.keys:
-            ids = list(self.data[key]['images'].keys())
-            imgs = {}
-            boxes = {}
+        self.detector = self._init_detector(config_path, weight_path)
+        self.img_feature_extractor, self.transform = self._init_extractor()
+
+        with open(data_path, 'r') as f:
+            self.data = json.load(f)
+        self.keys = list(self.data.keys())
+
+        self.img_dict = {}
+        self.ids_dict = {}
+        self.box_dict = {}
+        self.category_dict = {}
+        self._load_images_and_boxes()
+
+        self.image_feature = self.get_img_feature()
+        self.roi_feature, self.detected_boxes = self.get_roi_feature()
+        self.sift_feature = self.get_SIFT_feature()
+
+        depth_data = np.load('./data/img_depth.npz')
+        if self.training:
+            self.location_points = self.get_location_points(depth_data)
+        else:
+            self.location_points = self.get_location_points(depth_data)
+
+    def _load_images_and_boxes(self):
+
+        for key in tqdm(self.keys, desc="Loading images and boxes"):
+            imgs, ids, boxes = {}, list(self.data[key]['images'].keys()), {}
             for frame_id, bbox in self.data[key]['images'].items():
-                img_path = os.path.join(self.image_root, frame_id + '.png')
+                img_path = os.path.join(self.image_root, f"{frame_id}.png")
                 image = np.array(Image.open(img_path).convert("RGB"))
                 imgs[frame_id] = image
                 boxes[frame_id] = bbox
 
-            img_dict[key] = imgs
-            ids_dict[key] = ids
-            box_dict[key] = boxes
-            category_dict[key] = self.data[key]['category']
+            self.img_dict[key] = imgs
+            self.ids_dict[key] = ids
+            self.box_dict[key] = boxes
+            self.category_dict[key] = self.data[key]['category']
 
-        self.image_feature = self.get_img_feature(img_dict)
-        self.roi_feature, self.detected_boxes = self.get_roi_feature(img_dict, ids_dict,
-                                                                     box_dict, category_dict,
-                                                                     config_path, weight_path)
-        self.sift_feature = self.get_SIFT_feature(img_dict)
-        depth_data = np.load('./data/img_depth.npz')
+    def _init_detector(self, config_path, weight_path):
+        cfg = get_cfg()
+        cfg.merge_from_file(config_path)
+        cfg.MODEL.WEIGHTS = weight_path
+        cfg.MODEL.DEVICE = self.device
+        predictor = DefaultPredictor(cfg)
+        return predictor
 
-        if self.training:
-            self.location_points = self.get_location_points(box_dict, depth_data)
-        else:
-            self.location_points = self.get_location_points(self.detected_boxes, depth_data)
+    def _init_extractor(self, resize=224):
+        resnet_model = models.resnet101(pretrained=True)
+        resnet_model = torch.nn.Sequential(*(list(resnet_model.children())[:-1]))
+        resnet_model = resnet_model.to(self.device)
+        transform = transforms.Compose([
+            transforms.Resize((resize, resize)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
 
+        return resnet_model, transform
 
     def __len__(self):
         return len(self.keys)
@@ -71,8 +94,6 @@ class TSDataset(Dataset):
         category = int(self.data[key]['category'])
         location_point = self.location_points[key]
 
-
-
         return {
             'image_feature': image_feature,
             'roi_feature': roi_feature,
@@ -84,46 +105,33 @@ class TSDataset(Dataset):
         }
 
 
-    def get_img_feature(self, img_dict, resize=224):
-        resnet_model = models.resnet101(pretrained=True)
-        resnet_model = torch.nn.Sequential(*(list(resnet_model.children())[:-1]))
-        resnet_model = resnet_model.to(self.device)
-        transform = transforms.Compose([
-            transforms.Resize((resize, resize)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
+    def get_img_feature(self):
 
         img_featrues = {}
-        for key in img_dict.keys():
-            images = list(img_dict[key].values())
-            imgs = [transform(Image.fromarray(img)) for img in images]
+        for key in self.img_dict.keys():
+            images = list(self.img_dict[key].values())
+            imgs = [self.transform(Image.fromarray(img)) for img in images]
             imgs = torch.stack(imgs, dim=0).to(self.device)
             with torch.no_grad():
-                features = resnet_model(imgs)
+                features = self.img_feature_extractor(imgs)
                 features = features.view(features.size(0), -1)
             img_featrues[key] = features
 
         return img_featrues
 
-    def get_roi_feature(self, img_dict, ids_dict, box_dict, category_dict, config_path, weight_path):
-        cfg = get_cfg()
-        cfg.merge_from_file(config_path)
-        cfg.MODEL.WEIGHTS = weight_path
-        cfg.MODEL.DEVICE = self.device
-        predictor = DefaultPredictor(cfg)
+    def get_roi_feature(self):
 
         roi_feature_dict = {}
         detected_boxes_dict = {}
-        for key in img_dict.keys():
-            images = list(img_dict[key].values())
-            ids = ids_dict[key]
-            boxes_g = box_dict[key]
-            category = int(category_dict[key])
+        for key in self.img_dict.keys():
+            images = list(self.img_dict[key].values())
+            ids = self.ids_dict[key]
+            boxes_g = self.box_dict[key]
+            category = int(self.category_dict[key])
             instances_roi = {}
             for i in range(len(images)):
                 with torch.no_grad():
-                    outputs, roi_features = predictor(images[i])
+                    outputs, roi_features = self.detector(images[i])
                 instances = outputs[0]['instances'].to("cpu")
 
                 boxes = instances.pred_boxes.tensor.numpy().tolist()
@@ -182,11 +190,11 @@ class TSDataset(Dataset):
 
         return iou
 
-    def get_SIFT_feature(self, img_dict):
+    def get_SIFT_feature(self):
         sift_feature_dict = {}
-        for key in img_dict.keys():
+        for key in self.img_dict.keys():
             descriptors_list = []
-            images = img_dict[key]
+            images = self.img_dict[key]
             boxes = self.detected_boxes[key]
             if len(list(boxes.keys())) == 0:
                 sift_feature_dict[key] = [torch.zeros(160, dtype=torch.float32).to(self.device)]
@@ -258,7 +266,7 @@ class TSDataset(Dataset):
 
         return img_features
 
-    def get_location_points(self, box_dict, depth_data):
+    def get_location_points(self, depth_data):
 
         CENTER_X = 621
         FOV_X = 45
@@ -268,7 +276,7 @@ class TSDataset(Dataset):
 
         position_dict = {}
 
-        for key, boxes in box_dict.items():
+        for key, boxes in self.box_dict.items():
             image_yaws = self.data[key].get('image_yaws', {})
             geolocs = self.data[key].get('image_geolocations', {})
 

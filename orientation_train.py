@@ -60,10 +60,6 @@ def train(cfg, model, train_loader, val_loader):
 
         evaluate(cfg, model, val_loader, train_loader, epoch, errors)
 
-
-
-
-
 def evaluate(cfg, model, test_loader, train_loader, epoch=0, errors_train=[], num_classes=3):
     model.eval()
     correct = 0
@@ -97,7 +93,6 @@ def evaluate(cfg, model, test_loader, train_loader, epoch=0, errors_train=[], nu
         print('Accuracy of class {}: {:.2f}%'.format(i, accuracy))
         mean_accuracy += accuracy
     print('Mean Accuracy of three classes: {:.2f}%'.format(mean_accuracy / num_classes))
-
 
     if epoch == cfg.SOLVER.MAX_EPOCHS - 1:
         all_geolocations = []
@@ -174,16 +169,14 @@ def main():
     device = cfg.MODEL.DEVICE
 
     # Dataset
-    train_set = TSDataset(cfg.DATA.TRAIN_JSON,
-                          cfg.DATA.TRAIN_IMG_ROOT,
-                          cfg.MODEL.DEVICE,
-                          cfg.DETECTRON2.CONFIG_PATH,
-                          cfg.DETECTRON2.WEIGHT_PATH,
+    train_set = TSDataset(cfg.DATA.TRAIN_JSON, cfg.DATA.TRAIN_IMG_ROOT,
+                          cfg.MODEL.DEVICE, cfg.DETECTRON2.CONFIG_PATH, cfg.DETECTRON2.WEIGHT_PATH,
                           training=True)
     train_loader = DataLoader(train_set, batch_size=cfg.SOLVER.BATCH_SIZE, shuffle=True,
-                                  collate_fn=custom_collate_fn)
+                              collate_fn=custom_collate_fn)
 
-    val_set = TSDataset(cfg.DATA.TEST_JSON, cfg.DATA.TEST_IMG_ROOT, cfg.MODEL.DEVICE, cfg.DETECTRON2.CONFIG_PATH, cfg.DETECTRON2.WEIGHT_PATH)
+    val_set = TSDataset(cfg.DATA.TEST_JSON, cfg.DATA.TEST_IMG_ROOT,
+                        cfg.MODEL.DEVICE, cfg.DETECTRON2.CONFIG_PATH, cfg.DETECTRON2.WEIGHT_PATH)
     val_loader = DataLoader(val_set, batch_size=cfg.SOLVER.BATCH_SIZE, collate_fn=custom_collate_fn)
 
     # Model
@@ -194,8 +187,6 @@ def main():
         sift_hidden=cfg.MODEL.SIFT_HIDDEN,
         img_hidden=cfg.MODEL.IMG_HIDDEN,
         num_classes=cfg.MODEL.NUM_CLASSES,
-        config_path=cfg.DETECTRON2.CONFIG_PATH,
-        weight_path=cfg.DETECTRON2.WEIGHT_PATH,
         num_layers=cfg.MODEL.NUM_LAYERS,
         d_model=cfg.MODEL.D_MODEL,
         nhead=cfg.MODEL.NHEAD,

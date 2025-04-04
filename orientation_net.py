@@ -10,26 +10,14 @@ from shapely.geometry import Point
 import pyproj
 from geopy.distance import geodesic
 
-from PIL import Image
-from detectron2.engine import DefaultPredictor
-from detectron2.config import get_cfg
-from torchvision import models, transforms
-from sklearn.cluster import AgglomerativeClustering
-
-import cv2
-
 class OrientationNet(nn.Module):
     def __init__(self,
                  roi_input_size, sift_input_size, roi_hidden, sift_hidden, img_hidden,
                  num_classes,
-                 config_path, weight_path,
                  num_layers=2, d_model=128, nhead=4, device="cuda"):
         super().__init__()
 
         self.device = device
-        # self.detector = self._init_detector(config_path, weight_path)
-        # self.img_feature_extractor, self.transform = self._init_extractor()
-
         self.roi_fc = nn.Linear(roi_input_size, roi_hidden)
         self.sift_fc = nn.Linear(sift_input_size, sift_hidden)
         self.image_fc = nn.Linear(2048, img_hidden)
@@ -41,26 +29,6 @@ class OrientationNet(nn.Module):
         )
 
         self.out_fc = nn.Linear(d_model + img_hidden, num_classes)
-
-    # def _init_detector(self, config_path, weight_path):
-    #     cfg = get_cfg()
-    #     cfg.merge_from_file(config_path)
-    #     cfg.MODEL.WEIGHTS = weight_path
-    #     cfg.MODEL.DEVICE = self.device
-    #     predictor = DefaultPredictor(cfg)
-    #     return predictor
-    #
-    # def _init_extractor(self, resize=224):
-    #     resnet_model = models.resnet101(pretrained=True)
-    #     resnet_model = torch.nn.Sequential(*(list(resnet_model.children())[:-1]))
-    #     resnet_model = resnet_model.to(self.device)
-    #     transform = transforms.Compose([
-    #         transforms.Resize((resize, resize)),
-    #         transforms.ToTensor(),
-    #         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    #     ])
-    #
-    #     return resnet_model, transform
 
     def forward(self, data):
         img_input = data['image_feature']
